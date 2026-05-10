@@ -1,25 +1,80 @@
--- Dummy Azure Anomalies
-INSERT INTO finops_anomalies 
-  (provider, resource_id, resource_name, severity, anomaly_type, cost_delta_usd, baseline_cost_usd, description)
-VALUES
-  ('azure', 'vm-prod-001', 'Production VM East', 'critical', 'cost_spike', 450.00, 120.00, 'VM cost tripled overnight, possible runaway process'),
-  ('azure', 'vm-dev-002', 'Dev VM West', 'high', 'idle_resource', 89.00, 85.00, 'VM running 24/7 but 2% CPU utilization for 14 days'),
-  ('azure', 'storage-001', 'Blob Storage Prod', 'medium', 'storage_growth', 45.00, 20.00, 'Unattached disk detected, no VM connected'),
-  ('azure', 'aks-node-001', 'AKS Node Pool', 'low', 'underutilization', 30.00, 28.00, 'Node pool oversized for current workload');
+-- ══════════════════════════════════════════════════════
+-- TESTING DUMMY DATA — azure_finops_recommendations
+-- Matches REAL Azure Advisor data exactly
+-- Run in TESTING Supabase project only
+-- ══════════════════════════════════════════════════════
 
--- Dummy Recommendations
-INSERT INTO finops_recommendations
-  (provider, resource_id, resource_name, category, title, description, estimated_savings_usd, effort_level, priority, current_config, recommended_config)
-VALUES
-  ('azure', 'vm-prod-001', 'Production VM East', 'rightsizing', 'Downsize D8s_v3 to D4s_v3', 'CPU avg 18% over 30 days, memory avg 22%', 210.00, 'low', 'high', 'Standard_D8s_v3', 'Standard_D4s_v3'),
-  ('azure', 'vm-dev-002', 'Dev VM West', 'idle_resources', 'Stop Dev VM on weekends', 'No usage detected Sat-Sun for past 3 weeks', 156.00, 'low', 'high', 'Running 24/7', 'Auto-shutdown Fri 6PM, Start Mon 8AM'),
-  ('azure', 'storage-001', 'Blob Storage Prod', 'storage', 'Delete unattached disk 128GB', 'Disk unattached for 45 days', 18.00, 'low', 'medium', '128GB Premium SSD unattached', 'Delete or snapshot + delete'),
-  ('azure', 'aks-node-001', 'AKS Node Pool', 'rightsizing', 'Scale down node pool from 5 to 3 nodes', 'Peak utilization never exceeded 45%', 320.00, 'medium', 'high', '5x Standard_D4s_v3 nodes', '3x Standard_D4s_v3 nodes');
+TRUNCATE TABLE azure_finops_recommendations;
 
--- Dummy AI Insights
-INSERT INTO finops_ai_insights
-  (provider, insight_type, title, summary, detailed_analysis, confidence_score, potential_savings_usd)
-VALUES
-  ('azure', 'anomaly_explanation', 'Production VM Cost Spike Analysis', 'Sudden 3x cost increase detected on vm-prod-001', 'Azure Advisor flagged this VM for unusual compute hours. Likely cause: scheduled job running indefinitely. Recommend checking Task Scheduler and cron jobs.', 0.91, 210.00),
-  ('azure', 'optimization', 'Weekend Shutdown Policy Could Save $156/month', 'Dev VMs running idle on weekends identified', 'Three dev VMs show zero activity Sat-Sun consistently. Implementing auto-shutdown policy via Azure Automation would recover this cost immediately.', 0.87, 156.00),
-  ('azure', 'trend', 'AKS Cost Trending Up 23% Month-over-Month', 'Node pool scaling not aligned with actual demand', 'Cluster autoscaler is not configured. Manual scaling left at peak capacity. Enabling autoscaler with min:2 max:5 could reduce baseline cost significantly.', 0.83, 320.00);
+INSERT INTO azure_finops_recommendations (
+  recommendation_id, subscription_id, category, offering_id, solution,
+  impact, sku, resource_id, resource_type, region, quantity, term,
+  lookback_days, monthly_savings_usd, annual_savings_usd, currency,
+  vm_size, status, detected_at, last_updated_at
+) VALUES
+
+-- PostgreSQL RI P3Y qty:4 lookback:60 → $185/month
+('/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939/providers/Microsoft.Advisor/recommendations/a1e924c8-d1ee-46ea-a70d-558c0be83b07',
+'36fa13d0-c1e6-4f42-a25a-57c1a6326939','Cost','07649cbd-2ee4-4992-898b-f5f16bad1b36',
+'Consider Database for PostgreSQL reserved instance to save over the pay-as-you-go costs',
+'High','AzureDB_PostgreSQL_Flexible_Server_General_Purpose_Ddsv5Series_Compute_vCore',
+'/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939','PostgreSQL','westeurope',
+4,'P3Y',60,185,2231,'USD',NULL,'open','2026-04-20 11:25:38','2026-04-20 01:40:07'),
+
+-- PostgreSQL RI P1Y qty:4 lookback:30 → $123/month
+('/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939/providers/Microsoft.Advisor/recommendations/1e8ec472-4f7a-283a-84a9-27dd475d3dcc',
+'36fa13d0-c1e6-4f42-a25a-57c1a6326939','Cost','07649cbd-2ee4-4992-898b-f5f16bad1b36',
+'Consider Database for PostgreSQL reserved instance to save over the pay-as-you-go costs',
+'High','AzureDB_PostgreSQL_Flexible_Server_General_Purpose_Ddsv5Series_Compute_vCore',
+'/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939','PostgreSQL','westeurope',
+4,'P1Y',30,123,1486,'USD',NULL,'open','2026-04-20 11:25:38','2026-04-20 01:40:07'),
+
+-- PostgreSQL RI P1Y qty:4 lookback:30 → $123/month (2nd)
+('/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939/providers/Microsoft.Advisor/recommendations/c756caf1-e7cc-195d-7bda-115bff00fa1d',
+'36fa13d0-c1e6-4f42-a25a-57c1a6326939','Cost','07649cbd-2ee4-4992-898b-f5f16bad1b36',
+'Consider Database for PostgreSQL reserved instance to save over the pay-as-you-go costs',
+'High','AzureDB_PostgreSQL_Flexible_Server_General_Purpose_Ddsv5Series_Compute_vCore',
+'/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939','PostgreSQL','westeurope',
+4,'P1Y',30,123,1486,'USD',NULL,'open','2026-04-20 11:25:38','2026-04-20 01:40:07'),
+
+-- VM RI P1Y qty:1 → $296/month
+('/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939/providers/Microsoft.Advisor/recommendations/vm-rec-001-d4sv3',
+'36fa13d0-c1e6-4f42-a25a-57c1a6326939','Cost','07649cbd-2ee4-4992-898b-f5f16bad1b36',
+'Consider virtual machine reserved instance to save over the on-demand costs',
+'High','Standard_D4s_v3',
+'/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-prod-001',
+'virtualmachines','westeurope',1,'P1Y',30,296,3552,'USD','Standard_D4s_v3','open',
+'2026-04-20 11:25:38','2026-04-20 01:40:07'),
+
+-- VM RI P1Y qty:1 → $48/month
+('/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939/providers/Microsoft.Advisor/recommendations/vm-rec-002-d2sv3',
+'36fa13d0-c1e6-4f42-a25a-57c1a6326939','Cost','07649cbd-2ee4-4992-898b-f5f16bad1b36',
+'Consider virtual machine reserved instance to save over the on-demand costs',
+'High','Standard_D2s_v3',
+'/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939/resourceGroups/rg-dev/providers/Microsoft.Compute/virtualMachines/vm-dev-001',
+'virtualmachines','westeurope',1,'P1Y',30,48,576,'USD','Standard_D2s_v3','open',
+'2026-04-20 11:25:38','2026-04-20 01:40:07'),
+
+-- VM RI P1Y qty:1 → $38/month
+('/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939/providers/Microsoft.Advisor/recommendations/vm-rec-003-b2ms',
+'36fa13d0-c1e6-4f42-a25a-57c1a6326939','Cost','07649cbd-2ee4-4992-898b-f5f16bad1b36',
+'Consider virtual machine reserved instance to save over the on-demand costs',
+'High','Standard_B2ms',
+'/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939/resourceGroups/rg-staging/providers/Microsoft.Compute/virtualMachines/vm-staging-001',
+'virtualmachines','westeurope',1,'P1Y',30,38,456,'USD','Standard_B2ms','open',
+'2026-04-20 11:25:38','2026-04-20 01:40:07'),
+
+-- Savings Plan Compute P1Y → $61/month
+('/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939/providers/Microsoft.Advisor/recommendations/sp-rec-001-compute',
+'36fa13d0-c1e6-4f42-a25a-57c1a6326939','Cost','07649cbd-2ee4-4992-898b-f5f16bad1b36',
+'Consider purchasing a savings plan for compute to unlock lower prices',
+'High','SavingsPlan_Compute_1Year',
+'/subscriptions/36fa13d0-c1e6-4f42-a25a-57c1a6326939',
+'subscription',NULL,1,'P1Y',30,61,732,'USD',NULL,'open',
+'2026-04-20 11:25:38','2026-04-20 01:40:07');
+
+-- Verify
+SELECT resource_type, solution, term, quantity, lookback_days,
+       monthly_savings_usd, annual_savings_usd, status
+FROM azure_finops_recommendations
+ORDER BY monthly_savings_usd DESC;
