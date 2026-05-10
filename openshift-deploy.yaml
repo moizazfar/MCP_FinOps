@@ -1,0 +1,126 @@
+---
+# ══════════════════════════════════════════════
+# 1. Secret — Supabase credentials
+#    oc create secret generic finops-mcp-secrets \
+#      --from-literal=supabase-url='https://xxx.supabase.co' \
+#      --from-literal=supabase-key='your-service-role-key' \
+#      -n moizaleem21-dev
+# ══════════════════════════════════════════════
+
+---
+# ══════════════════════════════════════════════
+# 2. Deployment
+# ══════════════════════════════════════════════
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finops-optimizer-mcp
+  namespace: moizaleem21-dev
+  labels:
+    app: finops-optimizer-mcp
+    component: aiops-studio
+    tier: mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: finops-optimizer-mcp
+  template:
+    metadata:
+      labels:
+        app: finops-optimizer-mcp
+    spec:
+      # No serviceAccountName needed — default SA is fine
+      containers:
+        - name: mcp-server
+          # Replace with your image after: oc new-build / podman push
+          image: image-registry.openshift-image-registry.svc:5000/moizaleem21-dev/finops-optimizer-mcp:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            - name: SUPABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: finops-mcp-secrets
+                  key: supabase-url
+            - name: SUPABASE_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: finops-mcp-secrets
+                  key: supabase-key
+            - name: PORT
+              value: "8080"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+
+---
+# ══════════════════════════════════════════════
+# 3. Service — internal cluster access
+# ══════════════════════════════════════════════
+apiVersion: v1
+kind: Service
+metadata:
+  name: finops-optimizer-mcp
+  namespace: moizaleem21-dev
+  labels:
+    app: finops-optimizer-mcp
+spec:
+  selector:
+    app: finops-optimizer-mcp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+
+---
+# ══════════════════════════════════════════════
+# 4. Route — external HTTPS access
+#    (needed if n8n is outside the cluster)
+# ══════════════════════════════════════════════
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: finops-optimizer-mcp
+  namespace: moizaleem21-dev
+  labels:
+    app: finops-optimizer-mcp
+spec:
+  to:
+    kind: Service
+    name: finops-optimizer-mcp
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

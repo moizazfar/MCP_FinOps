@@ -1,0 +1,88 @@
+{
+  "name": "FinOps MCP - Azure Advisor Remediation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 6 }]
+        }
+      },
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://finops-optimizer-mcp.moizaleem21-dev.svc.cluster.local:8080/mcp",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "jsonBody",
+              "value": "={{ JSON.stringify({ method: 'tools/call', params: { name: 'finops_get_savings_recommendations', arguments: { provider: 'azure', min_savings_usd: 50, limit: 20, response_format: 'json' } } }) }}"
+            }
+          ]
+        },
+        "options": { "response": { "response": { "responseFormat": "json" } } }
+      },
+      "name": "Get Azure Savings Recs",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse MCP response and extract recommendations\nconst body = $input.first().json;\nconst text = body?.result?.content?.[0]?.text || '{}';\nlet recs = [];\ntry {\n  const parsed = JSON.parse(text);\n  recs = parsed.recommendations || [];\n} catch(e) {\n  return [{ json: { error: 'Failed to parse MCP response', raw: text } }];\n}\n\n// Filter: only high priority, >$100/month savings\nconst filtered = recs.filter(r => \n  r.estimated_savings_usd > 100 && \n  (r.priority === 'high' || r.effort_level === 'low')\n);\n\nreturn filtered.map(r => ({ json: r }));"
+      },
+      "name": "Filter High-Value Recs",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://finops-optimizer-mcp.moizaleem21-dev.svc.cluster.local:8080/mcp",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "jsonBody",
+              "value": "={{ JSON.stringify({ method: 'tools/call', params: { name: 'finops_apply_remediation', arguments: { recommendation_id: $json.id, action_type: $json.category === 'rightsizing' ? 'rightsize' : ($json.category === 'idle_resources' ? 'stop_idle' : 'rightsize'), resource_id: $json.resource_id, provider: 'azure', executed_by: 'n8n_workflow', estimated_savings_usd: $json.estimated_savings_usd, notes: 'Auto-logged by n8n FinOps scheduler. Pending human approval.' } } }) }}"
+            }
+          ]
+        },
+        "options": { "response": { "response": { "responseFormat": "json" } } }
+      },
+      "name": "Log Remediation (Pending)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract remediation ID from MCP response\nconst body = $input.first().json;\nconst text = body?.result?.content?.[0]?.text || '';\n\n// Parse remediation ID from markdown response\nconst match = text.match(/\\*\\*Remediation ID\\*\\*: `([^`]+)`/);\nconst remId = match ? match[1] : null;\n\nreturn [{ json: { \n  remediation_id: remId, \n  resource_id: $('Filter High-Value Recs').item.json.resource_id,\n  mcp_response: text \n} }];"
+      },
+      "name": "Extract Remediation ID",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": { "main": [[{ "node": "Get Azure Savings Recs", "type": "main", "index": 0 }]] },
+    "Get Azure Savings Recs": { "main": [[{ "node": "Filter High-Value Recs", "type": "main", "index": 0 }]] },
+    "Filter High-Value Recs": { "main": [[{ "node": "Log Remediation (Pending)", "type": "main", "index": 0 }]] },
+    "Log Remediation (Pending)": { "main": [[{ "node": "Extract Remediation ID", "type": "main", "index": 0 }]] }
+  },
+  "_comment": "Internal cluster URL used: http://finops-optimizer-mcp.moizaleem21-dev.svc.cluster.local:8080/mcp — works when n8n is also on OpenShift. If n8n is external, use the Route URL instead."
+}
