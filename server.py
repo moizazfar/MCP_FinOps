@@ -318,9 +318,6 @@ class GetRemediationHistoryInput(PaginationMixin):
 
 
 # ─────────────────────────── Tools ───────────────────────────
-@mcp.tool()
-async def finops_health(ctx: Context) -> str:
-    return "✅ FinOps Optimizer MCP is healthy and connected to Supabase."
 
 @mcp.tool(
     name="finops_get_cost_anomalies",
@@ -409,40 +406,40 @@ async def finops_get_cost_anomalies(params: GetAnomaliesInput, ctx: Context) -> 
     },
 )
 async def finops_get_savings_recommendations(params: GetSavingsInput, ctx: Context) -> str:
-    """Fetch rightsizing and savings recommendations from finops_savings and finops_recommendations.
+    """Fetch Azure Advisor recommendations from azure_finops_recommendations table.
 
-    Returns actionable cost optimization opportunities including rightsizing suggestions,
-    idle resource identification, Reserved Instance recommendations, and storage optimization.
+    Returns cost optimization recommendations pulled from Azure Advisor including
+    Reserved Instance suggestions, Savings Plans, and rightsizing for VMs/PostgreSQL.
 
     Args:
         params (GetSavingsInput): Validated input containing:
             - provider (CloudProvider): Cloud provider filter (default: all)
             - min_savings_usd (Optional[float]): Minimum monthly savings threshold
-            - category (Optional[str]): Category filter (rightsizing/idle_resources/etc.)
+            - category (Optional[str]): Category filter e.g. 'Cost'
             - limit (int): Max results (default: 20)
             - offset (int): Pagination offset
             - response_format (ResponseFormat): markdown or json
 
     Returns:
-        str: Recommendations with estimated savings, effort level, and action steps.
+        str: Recommendations with savings, impact, SKU, region, subscription info.
     """
     client = _get_client(ctx)
     filters: Dict[str, str] = {}
 
-    if params.provider != CloudProvider.all:
-        filters["provider"] = f"eq.{params.provider.value}"
     if params.category:
         filters["category"] = f"eq.{params.category}"
     if params.min_savings_usd is not None:
-        filters["estimated_savings_usd"] = f"gte.{params.min_savings_usd}"
+        filters["monthly_savings_usd"] = f"gte.{params.min_savings_usd}"
+    # status=open only — ignore already actioned recs
+    filters["status"] = "eq.open"
 
     try:
         recs = await _supabase_select(
             client,
-            table="finops_recommendations",
-            select="id,provider,resource_id,resource_name,category,title,description,estimated_savings_usd,effort_level,priority,current_config,recommended_config,created_at",
+            table="azure_finops_recommendations",
+            select="id,recommendation_id,subscription_id,category,solution,impact,sku,resource_id,resource_type,region,quantity,term,lookback_days,monthly_savings_usd,annual_savings_usd,currency,vm_size,status,detected_at,last_updated_at",
             filters=filters,
-            order="estimated_savings_usd.desc",
+            order="monthly_savings_usd.desc",
             limit=params.limit,
             offset=params.offset,
         )
@@ -452,33 +449,44 @@ async def finops_get_savings_recommendations(params: GetSavingsInput, ctx: Conte
         return "Error [get_savings_recommendations]: Request timed out."
 
     if params.response_format == ResponseFormat.json:
-        total_savings = sum(r.get("estimated_savings_usd", 0) or 0 for r in recs)
+        total_monthly = sum(r.get("monthly_savings_usd") or 0 for r in recs)
+        total_annual = sum(r.get("annual_savings_usd") or 0 for r in recs)
         return json.dumps(
-            {"recommendations": recs, "count": len(recs), "total_estimated_savings_usd": total_savings},
+            {
+                "recommendations": recs,
+                "count": len(recs),
+                "total_monthly_savings_usd": total_monthly,
+                "total_annual_savings_usd": total_annual,
+            },
             indent=2,
         )
 
     if not recs:
-        return "✅ No savings recommendations found matching your filters."
+        return "✅ No open Azure Advisor recommendations found matching your filters."
 
-    total_savings = sum(r.get("estimated_savings_usd", 0) or 0 for r in recs)
+    total_monthly = sum(r.get("monthly_savings_usd") or 0 for r in recs)
+    total_annual = sum(r.get("annual_savings_usd") or 0 for r in recs)
+
     lines = [
-        f"## 💰 Savings Recommendations ({len(recs)} results)\n",
-        f"**Total Estimated Monthly Savings: {_format_currency(total_savings)}**\n",
+        f"## 💰 Azure Advisor Recommendations ({len(recs)} results)\n",
+        f"- **Total Monthly Savings**: {_format_currency(total_monthly)}",
+        f"- **Total Annual Savings**: {_format_currency(total_annual)}\n",
     ]
     for r in recs:
-        priority_map = {"high": "🔴", "medium": "🟡", "low": "🟢"}
-        p_emoji = priority_map.get(str(r.get("priority", "")).lower(), "⚪")
+        impact = r.get("impact", "")
+        impact_emoji = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(impact, "⚪")
+        currency = r.get("currency", "USD")
         lines.append(
-            f"### {p_emoji} {r.get('title', r.get('resource_name', 'Unknown'))} [{r.get('provider', '').upper()}]\n"
-            f"- **Rec ID**: `{r.get('id')}`\n"
-            f"- **Resource**: `{r.get('resource_id')}`\n"
-            f"- **Category**: {r.get('category', 'N/A')}\n"
-            f"- **Savings**: {_format_currency(r.get('estimated_savings_usd'))}/month\n"
-            f"- **Effort**: {r.get('effort_level', 'N/A')} | **Priority**: {r.get('priority', 'N/A')}\n"
-            f"- **Current**: `{r.get('current_config', 'N/A')}`\n"
-            f"- **Recommended**: `{r.get('recommended_config', 'N/A')}`\n"
-            f"- **Details**: {r.get('description', 'N/A')}\n"
+            f"### {impact_emoji} {r.get('solution', 'Recommendation')}\n"
+            f"- **Rec ID**: `{r.get('recommendation_id', r.get('id'))}`\n"
+            f"- **Resource Type**: {r.get('resource_type', 'N/A')} | **Region**: {r.get('region', 'N/A')}\n"
+            f"- **SKU**: `{r.get('sku', 'N/A')}` | **VM Size**: `{r.get('vm_size', 'N/A')}`\n"
+            f"- **Subscription**: `{r.get('subscription_id', 'N/A')}`\n"
+            f"- **Impact**: {impact} | **Term**: {r.get('term', 'N/A')} | **Qty**: {r.get('quantity', 'N/A')}\n"
+            f"- **Monthly Savings**: {_format_currency(r.get('monthly_savings_usd'))} {currency} "
+            f"| **Annual**: {_format_currency(r.get('annual_savings_usd'))} {currency}\n"
+            f"- **Lookback**: {r.get('lookback_days', 'N/A')} days | **Status**: {r.get('status', 'N/A')}\n"
+            f"- **Detected**: {r.get('detected_at', 'N/A')}\n"
         )
     return "\n".join(lines)
 
@@ -592,7 +600,7 @@ async def finops_rightsizing_analysis(params: RightsizingInput, ctx: Context) ->
         recs, anomalies = await _parallel_fetch(
             client,
             [
-                ("finops_recommendations", "id,category,title,description,estimated_savings_usd,effort_level,priority,current_config,recommended_config,created_at", resource_filter),
+                ("azure_finops_recommendations", "id,recommendation_id,solution,impact,sku,vm_size,resource_type,region,monthly_savings_usd,annual_savings_usd,currency,term,status,detected_at", resource_filter),
                 ("finops_anomalies", "id,severity,anomaly_type,cost_delta_usd,detected_at,description", resource_filter),
             ],
         )
@@ -613,27 +621,28 @@ async def finops_rightsizing_analysis(params: RightsizingInput, ctx: Context) ->
             indent=2,
         )
 
-    total_savings = sum(r.get("estimated_savings_usd", 0) or 0 for r in recs)
+    total_monthly = sum(r.get("monthly_savings_usd") or 0 for r in recs)
     lines = [
         f"## 🔍 Rightsizing Analysis: `{params.resource_id}`\n",
         f"- **Provider**: {params.provider.value.upper()}",
         f"- **Current SKU**: {params.current_sku or 'Not specified'}",
-        f"- **Total Estimated Savings**: {_format_currency(total_savings)}/month\n",
+        f"- **Total Monthly Savings**: {_format_currency(total_monthly)}\n",
     ]
 
     if recs:
-        lines.append(f"### 📋 Recommendations ({len(recs)})\n")
+        lines.append(f"### 📋 Azure Advisor Recommendations ({len(recs)})\n")
         for r in recs:
+            impact = r.get("impact", "")
+            impact_emoji = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(impact, "⚪")
             lines.append(
-                f"**{r.get('title', 'Optimization')}** ({r.get('category', 'N/A')})\n"
-                f"- Current: `{r.get('current_config', 'N/A')}` → Recommended: `{r.get('recommended_config', 'N/A')}`\n"
-                f"- Savings: {_format_currency(r.get('estimated_savings_usd'))}/month | "
-                f"Effort: {r.get('effort_level', 'N/A')} | Priority: {r.get('priority', 'N/A')}\n"
-                f"- {r.get('description', '')}\n"
-                f"- Rec ID: `{r.get('id')}` _(use this for apply_remediation)_\n"
+                f"{impact_emoji} **{r.get('solution', 'Optimization')}**\n"
+                f"- SKU: `{r.get('sku', 'N/A')}` | VM Size: `{r.get('vm_size', 'N/A')}`\n"
+                f"- Monthly: {_format_currency(r.get('monthly_savings_usd'))} | Annual: {_format_currency(r.get('annual_savings_usd'))}\n"
+                f"- Term: {r.get('term', 'N/A')} | Region: {r.get('region', 'N/A')}\n"
+                f"- Rec ID: `{r.get('recommendation_id', r.get('id'))}` _(use for apply_remediation)_\n"
             )
     else:
-        lines.append("✅ No rightsizing recommendations for this resource.\n")
+        lines.append("✅ No Azure Advisor recommendations for this resource.\n")
 
     if anomalies:
         lines.append(f"### ⚠️ Related Anomalies ({len(anomalies)})\n")
@@ -892,7 +901,33 @@ async def _parallel_fetch(
     return list(results)
 
 
+# ─────────────────────────── Health Endpoint ───────────────────────────
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    def log_message(self, format, *args):
+        pass
+
+def _start_health_server(port: int = 8081):
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
 # ─────────────────────────── Entry Point ───────────────────────────
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    port = int(os.environ.get("PORT", "8080"))
+    host = os.environ.get("HOST", "0.0.0.0")
+    health_port = int(os.environ.get("HEALTH_PORT", "8081"))
+    _start_health_server(health_port)
+    mcp.run(transport="streamable-http", host=host, port=port)
